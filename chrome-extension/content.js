@@ -22,6 +22,7 @@ const state = {
   utteranceCount: 0,
   isConnecting: false,
   silenceTimer: null,
+  vuRafId: null,
 };
 
 // ── Загрузка конфига ──────────────────────────────────────────────────────────
@@ -50,6 +51,13 @@ function initOverlay() {
         </svg>
       </span>
       <span id="zia-title">Interview AI</span>
+      <div id="zia-vu-meter" title="Уровень аудио">
+        <div class="zia-vu-bar"></div>
+        <div class="zia-vu-bar"></div>
+        <div class="zia-vu-bar"></div>
+        <div class="zia-vu-bar"></div>
+        <div class="zia-vu-bar"></div>
+      </div>
       <div id="zia-status-dot" class="status-idle" title="Idle"></div>
       <button id="zia-toggle" title="Включить/выключить (Alt+Shift+I)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -300,6 +308,9 @@ async function startAudioCapture() {
       if (state.active) stopCapture();
     });
 
+    // Запускаем VU-метр
+    startVuMeter(analyser);
+
     updateTranscript('Захват вкладки активен. Говорите...', false);
     console.log('[ZIA] Tab audio capture started via getDisplayMedia');
 
@@ -351,18 +362,28 @@ async function startAudioCapture() {
           state.mediaStream = screenAudioStream;
           state.audioCtx = new AudioContext({ sampleRate: 16000 });
           const screenSource = state.audioCtx.createMediaStreamSource(screenAudioStream);
+
+          // AnalyserNode для VU-метра (fallback)
+          const screenAnalyser = state.audioCtx.createAnalyser();
+          screenAnalyser.fftSize = 2048;
+          screenSource.connect(screenAnalyser);
+
           state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
           state.processor.onaudioprocess = (e) => {
             if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
             state.ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
           };
-          screenSource.connect(state.processor);
+          screenAnalyser.connect(state.processor);
           state.processor.connect(state.audioCtx.destination);
 
           screenAudio[0].addEventListener('ended', () => {
             console.log('[ZIA] Screen audio track ended');
             if (state.active) stopCapture();
           });
+
+          // Запускаем VU-метр для системного звука
+          stopVuMeter(); // сбрасываем предыдущий если был
+          startVuMeter(screenAnalyser);
 
           updateTranscript('Захват системного звука активен. Говорите...', false);
           console.log('[ZIA] Screen audio capture started (fallback)');
@@ -465,6 +486,66 @@ async function startAudioCapture() {
   }
 }
 
+// ── VU-метр ───────────────────────────────────────────────────────────────────
+// Читает данные из AnalyserNode через requestAnimationFrame и обновляет 5 баров
+function startVuMeter(analyser) {
+  const meter = document.getElementById('zia-vu-meter');
+  if (!meter) return;
+  const bars = meter.querySelectorAll('.zia-vu-bar');
+  meter.classList.add('vu-active');
+
+  const bufLen = analyser.frequencyBinCount; // fftSize / 2
+  const dataArr = new Float32Array(bufLen);
+  const MAX_H = 14; // px — максимальная высота бара
+
+  function tick() {
+    state.vuRafId = requestAnimationFrame(tick);
+
+    analyser.getFloatTimeDomainData(dataArr);
+
+    // RMS amplitude за текущий буфер
+    let sum = 0;
+    for (let i = 0; i < bufLen; i++) sum += dataArr[i] * dataArr[i];
+    const rms = Math.sqrt(sum / bufLen);
+
+    // Нормализуем: 0..1 → логарифмическая шкала для лучшей визуализации
+    const norm = Math.min(1, rms * 8); // усиление ×8 чтобы тихий сигнал был виден
+    const level = Math.pow(norm, 0.5);  // sqrt для «сжатой» шкалы
+
+    bars.forEach((bar, i) => {
+      // Каждый бар — порог i/5 от level
+      const threshold = (i + 1) / bars.length;
+      const active = level >= threshold;
+      const h = active ? Math.round(MAX_H * (threshold + 0.05)) : 3;
+      bar.style.height = h + 'px';
+
+      bar.classList.remove('vu-low', 'vu-mid', 'vu-high');
+      if (active) {
+        if (i < 2)      bar.classList.add('vu-low');
+        else if (i < 4) bar.classList.add('vu-mid');
+        else            bar.classList.add('vu-high');
+      }
+    });
+  }
+
+  tick();
+}
+
+function stopVuMeter() {
+  if (state.vuRafId) {
+    cancelAnimationFrame(state.vuRafId);
+    state.vuRafId = null;
+  }
+  const meter = document.getElementById('zia-vu-meter');
+  if (meter) {
+    meter.classList.remove('vu-active');
+    meter.querySelectorAll('.zia-vu-bar').forEach(b => {
+      b.style.height = '3px';
+      b.classList.remove('vu-low', 'vu-mid', 'vu-high');
+    });
+  }
+}
+
 function float32ToPCM16(float32Array) {
   const buf = new ArrayBuffer(float32Array.length * 2);
   const view = new DataView(buf);
@@ -476,6 +557,9 @@ function float32ToPCM16(float32Array) {
 }
 
 function stopAudioCapture() {
+  // Останавливаем VU-метр
+  stopVuMeter();
+
   // Отменяем silence detection timer если он ещё активен
   if (state.silenceTimer) {
     clearTimeout(state.silenceTimer);

@@ -262,6 +262,33 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── VU-метр ─────────────────────────────────────────────────────────── */
+#zia-vu-meter {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  padding: 0 2px;
+  opacity: 0.25;
+  transition: opacity 0.3s;
+  flex-shrink: 0;
+}
+#zia-vu-meter.vu-active {
+  opacity: 1;
+}
+
+.zia-vu-bar {
+  width: 3px;
+  border-radius: 1.5px;
+  background: rgba(255,255,255,0.2);
+  height: 3px;
+  transition: height 0.07s ease-out, background 0.07s ease-out;
+}
+
+.zia-vu-bar.vu-low    { background: #22c55e; }
+.zia-vu-bar.vu-mid    { background: #facc15; }
+.zia-vu-bar.vu-high   { background: #ef4444; }
+
 /* ── Resize handle ──────────────────────────────────────────────────── */
 #zia-resize-handle {
   position: absolute;
