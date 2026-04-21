@@ -179,7 +179,7 @@ async def deepgram_proxy(ws: WebSocket):
     try:
         async with ws_lib.connect(
             dg_url,
-            extra_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
+            additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
             ping_interval=10,
             ping_timeout=20,
         ) as dg_ws:
