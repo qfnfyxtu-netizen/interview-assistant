@@ -446,15 +446,20 @@ function connectWebSocket() {
 
   state.ws.onclose = () => {
     state.isConnecting = false;
-    if (state.active) {
+    // Переподключаемся только если активны И ещё нет открытого WS
+    if (state.active && (!state.ws || state.ws.readyState === WebSocket.CLOSED)) {
       setStatus('connecting');
-      setTimeout(connectWebSocket, 3000); // переподключение
+      setTimeout(() => {
+        if (state.active) connectWebSocket();
+      }, 3000);
     }
   };
 }
 
 function handleServerMessage(data) {
   if (data.type === 'transcript') {
+    // Лог для отладки — виден при фильтре ZIA
+    console.log(`[ZIA] transcript${data.is_final ? ' [FINAL]' : ''}:`, data.text);
     updateTranscript(data.text, data.is_final);
 
     if (data.is_final && data.text.trim().length > 10) {
