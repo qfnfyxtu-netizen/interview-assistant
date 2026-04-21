@@ -1,0 +1,29 @@
+# fly.toml — конфигурация для деплоя backend на Fly.io
+# Используйте: fly launch --config fly.toml
+
+app = "interview-assistant-backend"
+primary_region = "ams"  # Amsterdam — ближайший к России
+
+[build]
+  dockerfile = "../../backend/Dockerfile"
+
+[env]
+  BACKEND_HOST = "0.0.0.0"
+  BACKEND_PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

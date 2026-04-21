@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Interview Assistant</title>
+  <style>
+    /* ───────── Reset & Base ───────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ───────── Control Panel ───────── */
+    .control-panel {
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .control-panel h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-right: 8px;
+    }
+
+    select, button, input {
+      font-size: 13px;
+      border-radius: 6px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 6px 10px;
+      outline: none;
+    }
+
+    button {
+      cursor: pointer;
+      transition: background 0.15s;
+      font-weight: 500;
+    }
+
+    button.primary { background: #2563eb; border-color: #3b82f6; color: white; }
+    button.primary:hover { background: #1d4ed8; }
+    button.danger { background: #dc2626; border-color: #ef4444; color: white; }
+    button.danger:hover { background: #b91c1c; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 99px;
+      background: #1e293b;
+      border: 1px solid #334155;
+    }
+
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .status-dot.green { background: #22c55e; }
+    .status-dot.yellow { background: #f59e0b; animation: pulse 1s infinite; }
+    .status-dot.red { background: #ef4444; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* ───────── Main Layout ───────── */
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      grid-template-rows: 1fr;
+      flex: 1;
+      overflow: hidden;
+      gap: 0;
+    }
+
+    /* ───────── Transcript Panel ───────── */
+    .transcript-panel {
+      padding: 16px;
+      overflow-y: auto;
+      border-right: 1px solid #1e293b;
+    }
+
+    .transcript-panel h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .transcript-entry {
+      margin-bottom: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .transcript-entry.final { background: #1e293b; }
+    .transcript-entry.interim { background: #0f172a; color: #64748b; font-style: italic; }
+
+    .speaker-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+
+    .speaker-0 { color: #60a5fa; }
+    .speaker-1 { color: #34d399; }
+    .speaker-2 { color: #f472b6; }
+    .speaker-3 { color: #fb923c; }
+
+    /* ───────── Hints Panel ───────── */
+    .hints-panel {
+      padding: 16px;
+      overflow-y: auto;
+      background: #0a1120;
+    }
+
+    .hints-panel h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .hints-panel h2 button {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: transparent;
+      border-color: #334155;
+      color: #64748b;
+    }
+
+    .hint-card {
+      margin-bottom: 10px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid;
+      animation: slideIn 0.2s ease;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(-8px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .hint-card.critical { border-color: #dc2626; background: #1f0a0a; }
+    .hint-card.high     { border-color: #d97706; background: #1a110a; }
+    .hint-card.medium   { border-color: #1d4ed8; background: #0a0f1f; }
+    .hint-card.low      { border-color: #166534; background: #0a1a0f; }
+
+    .hint-header {
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .hint-card.critical .hint-header { background: rgba(220,38,38,0.15); color: #fca5a5; }
+    .hint-card.high .hint-header     { background: rgba(217,119,6,0.15); color: #fcd34d; }
+    .hint-card.medium .hint-header   { background: rgba(29,78,216,0.15); color: #93c5fd; }
+    .hint-card.low .hint-header      { background: rgba(22,101,52,0.15); color: #86efac; }
+
+    .hint-query { opacity: 0.7; font-weight: 400; font-style: italic; margin-left: 4px; flex: 1; }
+
+    .hint-body { padding: 10px; font-size: 13px; line-height: 1.6; color: #cbd5e1; }
+
+    .hint-close {
+      background: transparent;
+      border: none;
+      color: #64748b;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0 4px;
+      line-height: 1;
+    }
+
+    .hint-source {
+      padding: 4px 10px 8px;
+      font-size: 11px;
+      color: #475569;
+    }
+
+    .processing-indicator {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #60a5fa;
+      padding: 8px;
+    }
+
+    .processing-indicator.active { display: flex; }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #1e40af;
+      border-top-color: #60a5fa;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ───────── Empty state ───────── */
+    .empty-state {
+      text-align: center;
+      color: #334155;
+      padding: 40px 20px;
+      font-size: 13px;
+    }
+
+    .empty-state .icon { font-size: 32px; margin-bottom: 8px; }
+
+    /* ───────── Keyword chips ───────── */
+    .keywords-bar {
+      padding: 8px 16px;
+      background: #0a1120;
+      border-top: 1px solid #1e293b;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      min-height: 40px;
+      align-items: center;
+    }
+
+    .keyword-chip {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 99px;
+      padding: 2px 10px;
+      font-size: 12px;
+      color: #93c5fd;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .keyword-chip:hover { background: #2d3f55; }
+    .keyword-chip.active { background: #1e40af; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <!-- Control Panel -->
+  <div class="control-panel">
+    <h1>🎙 Interview Assistant</h1>
+
+    <select id="device-select">
+      <option value="">Загрузка устройств...</option>
+    </select>
+
+    <select id="mode-select">
+      <option value="microphone">Микрофон</option>
+      <option value="loopback">Loopback (Virtual Cable)</option>
+      <option value="tab">Захват вкладки</option>
+    </select>
+
+    <select id="profile-select">
+      <option value="medical">🏥 Медицина</option>
+      <option value="interview">💼 Собеседование</option>
+      <option value="general">🌐 Общий</option>
+    </select>
+
+    <button id="start-btn" class="primary">▶ Старт</button>
+    <button id="stop-btn" class="danger" disabled>■ Стоп</button>
+
+    <div class="status-badge">
+      <div class="status-dot red" id="ws-dot"></div>
+      <span id="ws-status">Отключено</span>
+    </div>
+
+    <div class="status-badge">
+      <div class="status-dot red" id="audio-dot"></div>
+      <span id="audio-status">Нет аудио</span>
+    </div>
+  </div>
+
+  <!-- Main Layout -->
+  <div class="main">
+    <!-- Transcript -->
+    <div class="transcript-panel">
+      <h2>Транскрипция</h2>
+      <div id="transcript-container">
+        <div class="empty-state">
+          <div class="icon">🎤</div>
+          Нажмите «Старт» и выберите аудиоустройство
+        </div>
+      </div>
+    </div>
+
+    <!-- Hints -->
+    <div class="hints-panel">
+      <h2>
+        Подсказки
+        <button onclick="window.app?.clearHints()">Очистить</button>
+      </h2>
+      <div class="processing-indicator" id="processing">
+        <div class="spinner"></div>
+        Запрос к Perplexity...
+      </div>
+      <div id="hints-container">
+        <div class="empty-state">
+          <div class="icon">💡</div>
+          Подсказки появятся автоматически
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keywords Bar -->
+  <div class="keywords-bar" id="keywords-bar">
+    <span style="font-size:11px;color:#475569">Ключевые слова:</span>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+httpx>=0.27.0
+python-dotenv>=1.0.0
+pydantic>=2.7.0
+
+# NLP для извлечения ключевых слов
+spacy>=3.7.0
+# python -m spacy download ru_core_news_sm
+# python -m spacy download en_core_web_sm
+
+# Опционально: keyBERT для лучшего извлечения ключевых слов
+# keybert>=0.8.0
