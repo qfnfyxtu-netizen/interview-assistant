@@ -21,6 +21,7 @@ const state = {
   hintTimer: null,
   utteranceCount: 0,
   isConnecting: false,
+  silenceTimer: null,
 };
 
 // ── Загрузка конфига ──────────────────────────────────────────────────────────
@@ -278,6 +279,11 @@ async function startAudioCapture() {
     state.audioCtx = new AudioContext({ sampleRate: 16000 });
     const source = state.audioCtx.createMediaStreamSource(audioOnlyStream);
 
+    // AnalyserNode для определения тишины
+    const analyser = state.audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+
     state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
     state.processor.onaudioprocess = (e) => {
       if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
@@ -285,7 +291,7 @@ async function startAudioCapture() {
       state.ws.send(float32ToPCM16(float32));
     };
 
-    source.connect(state.processor);
+    analyser.connect(state.processor);
     state.processor.connect(state.audioCtx.destination);
 
     // Если пользователь остановил шеринг — автостоп
@@ -296,6 +302,83 @@ async function startAudioCapture() {
 
     updateTranscript('Захват вкладки активен. Говорите...', false);
     console.log('[ZIA] Tab audio capture started via getDisplayMedia');
+
+    // ── Silence detection: если через 5 сек аудио всё ещё тихое → fallback ──
+    state.silenceTimer = setTimeout(async () => {
+      state.silenceTimer = null;
+      if (!state.active) return;
+
+      const timeDomain = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(timeDomain);
+      const maxLevel = timeDomain.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+      console.log('[ZIA] Silence check — max level:', maxLevel.toFixed(4));
+
+      if (maxLevel < 0.01) {
+        console.log('[ZIA] Tab audio is silent — attempting whole-screen fallback');
+        updateTranscript('Вкладка тихая — выбери «Весь экран» и включи «Поделиться системным звуком»', false);
+
+        // Останавливаем текущий стрим и аудио-граф
+        if (state.processor) { state.processor.disconnect(); state.processor = null; }
+        if (state.audioCtx) { await state.audioCtx.close().catch(() => {}); state.audioCtx = null; }
+        if (state.mediaStream) { state.mediaStream.getTracks().forEach(t => t.stop()); state.mediaStream = null; }
+
+        // Fallback: захват всего экрана с системным звуком
+        // Без preferCurrentTab → Chrome покажет «Весь экран» / «Окно» / «Вкладка"
+        // Пользователь должен выбрать «Весь экран» и включить "Поделиться системным звуком"
+        try {
+          const screenStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: 1, height: 1, frameRate: 1 },
+            audio: {
+              channelCount: 1,
+              echoCancellation: false,
+              noiseSuppression: false,
+              sampleRate: 16000,
+            },
+            // НЕТ preferCurrentTab — браузер предложит «Весь экран» первым
+          });
+
+          const screenAudio = screenStream.getAudioTracks();
+          if (screenAudio.length === 0) {
+            screenStream.getTracks().forEach(t => t.stop());
+            updateTranscript('Системный звук не захвачен. Включи галочку «Поделиться системным звуком» при выборе экрана.', true);
+            return;
+          }
+
+          // Останавливаем видео
+          screenStream.getVideoTracks().forEach(t => t.stop());
+
+          const screenAudioStream = new MediaStream(screenAudio);
+          state.mediaStream = screenAudioStream;
+          state.audioCtx = new AudioContext({ sampleRate: 16000 });
+          const screenSource = state.audioCtx.createMediaStreamSource(screenAudioStream);
+          state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
+          state.processor.onaudioprocess = (e) => {
+            if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+            state.ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
+          };
+          screenSource.connect(state.processor);
+          state.processor.connect(state.audioCtx.destination);
+
+          screenAudio[0].addEventListener('ended', () => {
+            console.log('[ZIA] Screen audio track ended');
+            if (state.active) stopCapture();
+          });
+
+          updateTranscript('Захват системного звука активен. Говорите...', false);
+          console.log('[ZIA] Screen audio capture started (fallback)');
+        } catch (fbErr) {
+          console.warn('[ZIA] Screen capture fallback failed:', fbErr.message);
+          if (fbErr.name !== 'NotAllowedError') {
+            updateTranscript(`Ошибка захвата экрана: ${fbErr.message}`, true);
+          } else {
+            updateTranscript('Захват системного звука отменён. Нажми ▶ снова.', false);
+          }
+        }
+      } else {
+        console.log('[ZIA] Audio level OK — silence check passed');
+      }
+    }, 5000);
+
     return true;
 
   } catch (err) {
@@ -393,6 +476,11 @@ function float32ToPCM16(float32Array) {
 }
 
 function stopAudioCapture() {
+  // Отменяем silence detection timer если он ещё активен
+  if (state.silenceTimer) {
+    clearTimeout(state.silenceTimer);
+    state.silenceTimer = null;
+  }
   if (state.processor) {
     state.processor.disconnect();
     state.processor = null;
