@@ -23,6 +23,8 @@ const state = {
   isConnecting: false,
   silenceTimer: null,
   vuRafId: null,
+  paused: false,
+  analyser: null,
 };
 
 // ── Загрузка конфига ──────────────────────────────────────────────────────────
@@ -59,6 +61,12 @@ function initOverlay() {
         <div class="zia-vu-bar"></div>
       </div>
       <div id="zia-status-dot" class="status-idle" title="Idle"></div>
+      <button id="zia-pause" title="Пауза (Alt+Shift+P)" class="hidden">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+          <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+        </svg>
+      </button>
       <button id="zia-toggle" title="Включить/выключить (Alt+Shift+I)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <path d="M5 3l14 9-14 9V3z" fill="currentColor"/>
@@ -148,18 +156,23 @@ function makeDraggable() {
 // ── Привязка событий оверлея ──────────────────────────────────────────────────
 function bindOverlayEvents() {
   document.getElementById('zia-toggle').addEventListener('click', toggleCapture);
+  document.getElementById('zia-pause').addEventListener('click', togglePause);
   document.getElementById('zia-close').addEventListener('click', () => {
     document.getElementById('zia-overlay').classList.add('zia-hidden');
   });
   document.getElementById('zia-mode-toggle').addEventListener('click', toggleMode);
   document.getElementById('zia-tts-btn').addEventListener('click', speakCurrentHint);
 
-  // Keyboard shortcut
+  // Keyboard shortcuts
   document.addEventListener('keydown', e => {
     if (e.altKey && e.shiftKey && e.key === 'I') {
       e.preventDefault();
       const overlay = document.getElementById('zia-overlay');
       overlay?.classList.toggle('zia-hidden');
+    }
+    if (e.altKey && e.shiftKey && e.key === 'P') {
+      e.preventDefault();
+      togglePause();
     }
   });
 
@@ -287,14 +300,15 @@ async function startAudioCapture() {
     state.audioCtx = new AudioContext({ sampleRate: 16000 });
     const source = state.audioCtx.createMediaStreamSource(audioOnlyStream);
 
-    // AnalyserNode для определения тишины
+    // AnalyserNode для определения тишины и VU-метра
     const analyser = state.audioCtx.createAnalyser();
     analyser.fftSize = 2048;
+    state.analyser = analyser;
     source.connect(analyser);
 
     state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
     state.processor.onaudioprocess = (e) => {
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.paused) return;
       const float32 = e.inputBuffer.getChannelData(0);
       state.ws.send(float32ToPCM16(float32));
     };
@@ -366,11 +380,12 @@ async function startAudioCapture() {
           // AnalyserNode для VU-метра (fallback)
           const screenAnalyser = state.audioCtx.createAnalyser();
           screenAnalyser.fftSize = 2048;
+          state.analyser = screenAnalyser;
           screenSource.connect(screenAnalyser);
 
           state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
           state.processor.onaudioprocess = (e) => {
-            if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+            if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.paused) return;
             state.ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
           };
           screenAnalyser.connect(state.processor);
@@ -446,7 +461,7 @@ async function startAudioCapture() {
     const source = state.audioCtx.createMediaStreamSource(stream);
     state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
     state.processor.onaudioprocess = (e) => {
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.paused) return;
       state.ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
     };
     source.connect(state.processor);
@@ -470,7 +485,7 @@ async function startAudioCapture() {
     const source = state.audioCtx.createMediaStreamSource(stream);
     state.processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
     state.processor.onaudioprocess = (e) => {
-      if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+      if (!state.ws || state.ws.readyState !== WebSocket.OPEN || state.paused) return;
       state.ws.send(float32ToPCM16(e.inputBuffer.getChannelData(0)));
     };
     source.connect(state.processor);
@@ -577,6 +592,7 @@ function stopAudioCapture() {
     state.mediaStream.getTracks().forEach(t => t.stop());
     state.mediaStream = null;
   }
+  state.analyser = null;
   console.log('[ZIA] Audio capture stopped');
 }
 
@@ -756,6 +772,62 @@ async function toggleCapture() {
   }
 }
 
+// ── Пауза / Возобновление ────────────────────────────────────────────────────
+// Пауза НЕ рвёт WebSocket и не останавливает MediaStream:
+// просто перестаём отправлять PCM-данные в Deepgram и гасим VU-метр.
+function pauseCapture() {
+  if (!state.active || state.paused) return;
+  state.paused = true;
+
+  stopVuMeter();
+  setStatus('idle');
+
+  const overlay = document.getElementById('zia-overlay');
+  overlay?.classList.add('zia-paused');
+
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) {
+    pauseBtn.classList.add('paused-active');
+    pauseBtn.title = 'Возобновить (Alt+Shift+P)';
+    pauseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+      <path d="M5 3l14 9-14 9V3z" fill="currentColor"/>
+    </svg>`;
+  }
+
+  updateTranscript('⏸ Пауза — аудио не передаётся', false);
+  console.log('[ZIA] Capture paused');
+}
+
+function resumeCapture() {
+  if (!state.active || !state.paused) return;
+  state.paused = false;
+
+  const overlay = document.getElementById('zia-overlay');
+  overlay?.classList.remove('zia-paused');
+
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) {
+    pauseBtn.classList.remove('paused-active');
+    pauseBtn.title = 'Пауза (Alt+Shift+P)';
+    pauseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+      <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+      <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+    </svg>`;
+  }
+
+  // Перезапускаем VU-метр если есть AnalyserNode
+  if (state.analyser) startVuMeter(state.analyser);
+
+  setStatus('listening');
+  updateTranscript('Захват возобновлён. Говорите...', false);
+  console.log('[ZIA] Capture resumed');
+}
+
+function togglePause() {
+  if (!state.active) return;
+  state.paused ? resumeCapture() : pauseCapture();
+}
+
 async function startCapture() {
   state.active = true;
   const toggleBtn = document.getElementById('zia-toggle');
@@ -775,12 +847,30 @@ async function startCapture() {
     return;
   }
 
+  // Показываем кнопку паузы
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) pauseBtn.classList.remove('hidden');
+
   connectWebSocket();
   console.log('[ZIA] Capture started');
 }
 
 async function stopCapture() {
   state.active = false;
+  state.paused = false;
+
+  // Скрываем кнопку паузы и сбрасываем состояние оверлея
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) {
+    pauseBtn.classList.add('hidden');
+    pauseBtn.classList.remove('paused-active');
+    pauseBtn.title = 'Пауза (Alt+Shift+P)';
+    pauseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+      <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+      <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+    </svg>`;
+  }
+  document.getElementById('zia-overlay')?.classList.remove('zia-paused');
 
   if (state.ws) {
     try {

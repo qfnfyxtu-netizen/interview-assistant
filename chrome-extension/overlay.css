@@ -262,6 +262,47 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Кнопка паузы ───────────────────────────────────────────────────── */
+#zia-pause {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+  display: flex;
+  align-items: center;
+}
+#zia-pause:hover {
+  color: #facc15;
+  background: rgba(250,204,21,0.10);
+}
+#zia-pause.paused-active {
+  color: #facc15;
+  background: rgba(250,204,21,0.14);
+  animation: zia-pause-blink 1.8s ease-in-out infinite;
+}
+@keyframes zia-pause-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* Оверлей в состоянии паузы — слабая жёлтая полоска сверху */
+#zia-overlay.zia-paused::before {
+  content: '⏸ ПАУЗА';
+  display: block;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #facc15;
+  background: rgba(250,204,21,0.08);
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(250,204,21,0.15);
+}
+
 /* ── VU-метр ─────────────────────────────────────────────────────────── */
 #zia-vu-meter {
   display: flex;
