@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Interview Assistant — Zoom Overlay",
+  "version": "1.0.0",
+  "description": "Реалтайм транскрипция + AI-подсказки для собеседований в Zoom",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "tabCapture"
+  ],
+  "host_permissions": [
+    "https://zoom.us/*",
+    "https://*.zoom.us/*",
+    "http://localhost:8000/*",
+    "ws://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://zoom.us/wc/*",
+        "https://*.zoom.us/wc/*",
+        "https://zoom.us/j/*",
+        "https://*.zoom.us/j/*"
+      ],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
