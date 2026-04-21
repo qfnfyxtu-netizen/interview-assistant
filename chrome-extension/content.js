@@ -24,8 +24,14 @@ const state = {
   silenceTimer: null,
   vuRafId: null,
   paused: false,
+  autoPaused: false,   // true если пауза сработала автоматически
   analyser: null,
 };
+
+// Константы авто-паузы
+const AUTO_PAUSE_SILENCE_MS = 5000; // мс тишины до паузы
+const AUTO_RESUME_SIGNAL_MS = 300;  // мс звука до возобновления
+const SILENCE_RMS_THRESHOLD = 0.005; // RMS ниже этого = тишина
 
 // ── Загрузка конфига ──────────────────────────────────────────────────────────
 async function loadConfig() {
@@ -513,8 +519,17 @@ function startVuMeter(analyser) {
   const dataArr = new Float32Array(bufLen);
   const MAX_H = 14; // px — максимальная высота бара
 
+  // Аккумуляторы для детектии тишины / звука
+  let silenceAccMs = 0;  // накопленное время тишины (ms)
+  let signalAccMs = 0;   // накопленное время звука (ms)
+  let lastTs = performance.now();
+
   function tick() {
     state.vuRafId = requestAnimationFrame(tick);
+
+    const now = performance.now();
+    const dt = now - lastTs;
+    lastTs = now;
 
     analyser.getFloatTimeDomainData(dataArr);
 
@@ -522,25 +537,55 @@ function startVuMeter(analyser) {
     let sum = 0;
     for (let i = 0; i < bufLen; i++) sum += dataArr[i] * dataArr[i];
     const rms = Math.sqrt(sum / bufLen);
+    const isSilent = rms < SILENCE_RMS_THRESHOLD;
 
-    // Нормализуем: 0..1 → логарифмическая шкала для лучшей визуализации
-    const norm = Math.min(1, rms * 8); // усиление ×8 чтобы тихий сигнал был виден
-    const level = Math.pow(norm, 0.5);  // sqrt для «сжатой» шкалы
-
-    bars.forEach((bar, i) => {
-      // Каждый бар — порог i/5 от level
-      const threshold = (i + 1) / bars.length;
-      const active = level >= threshold;
-      const h = active ? Math.round(MAX_H * (threshold + 0.05)) : 3;
-      bar.style.height = h + 'px';
-
-      bar.classList.remove('vu-low', 'vu-mid', 'vu-high');
-      if (active) {
-        if (i < 2)      bar.classList.add('vu-low');
-        else if (i < 4) bar.classList.add('vu-mid');
-        else            bar.classList.add('vu-high');
+    // ── Авто-пауза / возобновление ──
+    if (!state.paused) {
+      // Считаем время тишины
+      if (isSilent) {
+        silenceAccMs += dt;
+        signalAccMs = 0;
+        if (silenceAccMs >= AUTO_PAUSE_SILENCE_MS) {
+          silenceAccMs = 0;
+          state.autoPaused = true;
+          autoPauseCapture();
+          // tick продолжает работать: rAF запущен, но VU не рисуется (см. ниже)
+        }
+      } else {
+        silenceAccMs = 0;
       }
-    });
+    } else if (state.autoPaused) {
+      // Ожидаем звук для авто-возобновления
+      if (!isSilent) {
+        signalAccMs += dt;
+        if (signalAccMs >= AUTO_RESUME_SIGNAL_MS) {
+          signalAccMs = 0;
+          silenceAccMs = 0;
+          state.autoPaused = false;
+          autoResumeCapture();
+        }
+      } else {
+        signalAccMs = 0;
+      }
+    }
+
+    // ── Отрисовка баров (VU) ──
+    if (!state.paused) {
+      const norm = Math.min(1, rms * 8);
+      const level = Math.pow(norm, 0.5);
+      bars.forEach((bar, i) => {
+        const threshold = (i + 1) / bars.length;
+        const active = level >= threshold;
+        const h = active ? Math.round(MAX_H * (threshold + 0.05)) : 3;
+        bar.style.height = h + 'px';
+        bar.classList.remove('vu-low', 'vu-mid', 'vu-high');
+        if (active) {
+          if (i < 2)      bar.classList.add('vu-low');
+          else if (i < 4) bar.classList.add('vu-mid');
+          else            bar.classList.add('vu-high');
+        }
+      });
+    }
   }
 
   tick();
@@ -772,6 +817,66 @@ async function toggleCapture() {
   }
 }
 
+// ── Авто-пауза / авто-возобновление ─────────────────────────────────────────
+// Вызывается из startVuMeter tick(), не рвёт WS и стрим
+function autoPauseCapture() {
+  if (!state.active || state.paused) return;
+  state.paused = true;
+
+  // НЕ останавливаем rAF (тик должен слушать звук для авто-возобновления)
+  // Только гасим визуальную часть VU-метра
+  const vuMeter = document.getElementById('zia-vu-meter');
+  if (vuMeter) {
+    vuMeter.classList.remove('vu-active');
+    vuMeter.querySelectorAll('.zia-vu-bar').forEach(b => {
+      b.style.height = '3px';
+      b.classList.remove('vu-low', 'vu-mid', 'vu-high');
+    });
+  }
+  setStatus('idle');
+
+  const overlay = document.getElementById('zia-overlay');
+  overlay?.classList.add('zia-paused');
+
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) {
+    pauseBtn.classList.add('paused-active');
+    pauseBtn.title = 'Возобновить (Alt+Shift+P)';
+    pauseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+      <path d="M5 3l14 9-14 9V3z" fill="currentColor"/>
+    </svg>`;
+  }
+
+  updateTranscript('⏸ Тишина — Deepgram приостановлен. Звук возобновит запись.', false);
+  console.log('[ZIA] Auto-paused: silence > ' + AUTO_PAUSE_SILENCE_MS + 'ms');
+}
+
+function autoResumeCapture() {
+  if (!state.active || !state.paused) return;
+  state.paused = false;
+
+  const overlay = document.getElementById('zia-overlay');
+  overlay?.classList.remove('zia-paused');
+
+  const pauseBtn = document.getElementById('zia-pause');
+  if (pauseBtn) {
+    pauseBtn.classList.remove('paused-active');
+    pauseBtn.title = 'Пауза (Alt+Shift+P)';
+    pauseBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+      <rect x="6" y="4" width="4" height="16" fill="currentColor"/>
+      <rect x="14" y="4" width="4" height="16" fill="currentColor"/>
+    </svg>`;
+  }
+
+  // VU-метр уже работает (тик продолжался в фоне), только возвращаем визуал
+  const vuMeter = document.getElementById('zia-vu-meter');
+  if (vuMeter) vuMeter.classList.add('vu-active');
+
+  setStatus('listening');
+  updateTranscript('Звук обнаружен — запись возобновлена. Говорите...', false);
+  console.log('[ZIA] Auto-resumed: signal detected');
+}
+
 // ── Пауза / Возобновление ────────────────────────────────────────────────────
 // Пауза НЕ рвёт WebSocket и не останавливает MediaStream:
 // просто перестаём отправлять PCM-данные в Deepgram и гасим VU-метр.
@@ -801,6 +906,7 @@ function pauseCapture() {
 function resumeCapture() {
   if (!state.active || !state.paused) return;
   state.paused = false;
+  state.autoPaused = false; // сбрасываем флаг авто-паузы
 
   const overlay = document.getElementById('zia-overlay');
   overlay?.classList.remove('zia-paused');
@@ -858,6 +964,7 @@ async function startCapture() {
 async function stopCapture() {
   state.active = false;
   state.paused = false;
+  state.autoPaused = false;
 
   // Скрываем кнопку паузы и сбрасываем состояние оверлея
   const pauseBtn = document.getElementById('zia-pause');
